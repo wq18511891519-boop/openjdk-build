@@ -418,13 +418,13 @@ updateOpenj9Sources() {
 cloneOpenJDKGitRepo() {
   setGitCloneArguments
 
-  if [ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_DRAGONWELL}" ];then
-    GIT_CLONE_STR=$(echo ${GIT_CLONE_ARGUMENTS[*]} | sed "s#https://github.com#https://hub.fastgit.xyz#g")
-  fi
-  #echo "git clone ${GIT_CLONE_ARGUMENTS[*]}"
-  #git clone "${GIT_CLONE_ARGUMENTS[@]}"
-  echo "git clone ${GIT_CLONE_STR}"
-  git clone ${GIT_CLONE_STR}
+  #if [ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_DRAGONWELL}" ];then
+  #  GIT_CLONE_STR=$(echo ${GIT_CLONE_ARGUMENTS[*]} | sed "s#https://github.com#https://hub.fastgit.xyz#g")
+  #fi
+  echo "git clone ${GIT_CLONE_ARGUMENTS[*]}"
+  git clone "${GIT_CLONE_ARGUMENTS[@]}"
+  #echo "git clone ${GIT_CLONE_STR}"
+  #git clone ${GIT_CLONE_STR}
 }
 
 # Create the workspace
