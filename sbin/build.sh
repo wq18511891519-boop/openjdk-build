@@ -1120,6 +1120,8 @@ buildCyclonedxLib() {
   # Make Ant aware of cygwin path
   if [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]]; then
     ANTBUILDFILE=$(cygpath -m "${CYCLONEDB_DIR}/build.xml")
+    export ANT_HOME=/cygdrive/c/apache-ant
+    export PATH=${ANT_HOME}/bin:$PATH
   else
     ANTBUILDFILE="${CYCLONEDB_DIR}/build.xml"
   fi
