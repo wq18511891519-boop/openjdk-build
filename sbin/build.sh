@@ -1061,6 +1061,7 @@ executeTemplatedFile() {
     mkdir -p ${PRODUCT_HOME}/lib/serverless
     cp serverless-adapter/target/serverless-adapter-0.1.jar ${PRODUCT_HOME}/lib/serverless/serverless-adapter.jar
     cp serverless-adapter/output/libloadclassagent.so ${PRODUCT_HOME}/lib/serverless/
+    set -x
     if [ -z "`echo ${BUILD_CONFIG[BRANCH]} | grep standard`" ];then
       local criuReleaseUrl="https://api.github.com/repos/dragonwell-project/criu/releases/latest"
       if [ "$(arch)" = "x86_64" ];then
@@ -1076,6 +1077,7 @@ executeTemplatedFile() {
         mv criu ${PRODUCT_HOME}/lib/
       fi
     fi
+    set +x
   elif [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "${JDK8_CORE_VERSION}" ] && [ -n "`echo ${BUILD_CONFIG[BUILD_FULL_NAME]} | grep -E 'linux-x86_64|linux-aarch64'`" ]; then
     PRODUCT_HOME=$(ls -d ${PWD}/build/*/images/${BUILD_CONFIG[JDK_PATH]})
     git clone https://github.com/dragonwell-project/serverless-adapter-jdk8.git serverless-adapter
