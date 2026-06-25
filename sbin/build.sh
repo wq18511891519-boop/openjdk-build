@@ -455,7 +455,7 @@ configureVersionStringParameter() {
       addConfigureArg "--without-version-pre" ""
     fi
 
-    if [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" != "jdk21" ];then
+    if [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" != "jdk21" ] && [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" != "jdk25" ];then
       addConfigureArgIfValueIsNotEmpty "--with-version-build=" "${buildNumber}"
       if [[ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_DRAGONWELL}" ]] ; then
         addConfigureArgIfValueIsNotEmpty "--with-version-patch=" "${dragonwellPatch}"
