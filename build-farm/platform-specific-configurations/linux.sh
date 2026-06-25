@@ -218,7 +218,7 @@ elif [ "$JAVA_FEATURE_VERSION" -ge 25 ]; then
     tar xf devkit-gcc.tar.xz -C /usr/local/gcc14/
     rm -rf devkit-gcc.tar.xz
     export  CC=/usr/local/gcc14/bin/gcc-14.2.0
-    export CXX=/usr/local/gcc14/bin/g++-14.2.0
+    export CXX=/usr/local/gcc14/bin/g++
     export PATH=/usr/local/gcc14/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/gcc14/lib64:/usr/local/gcc14/lib
   elif [ "$(arch)" = "aarch64" ]; then
