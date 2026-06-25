@@ -815,6 +815,19 @@ executeTemplatedFile() {
     ./signutil sign ~/sk.bin ${libjvm_path}
     ./signutil verify ~/pk.bin ${libjvm_path}
   fi
+
+  if ([ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "${JDK11_CORE_VERSION}" ] || [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "${JDK8_CORE_VERSION}" ]) && [ -n "`echo ${BUILD_CONFIG[BUILD_FULL_NAME]} | grep -E 'linux-x86_64|linux-aarch64'`" ] && [ -z "$(echo ${BUILD_CONFIG[TARGET_FILE_NAME]} | grep -E 'riscv|alpine')" ] && [ -z "`echo ${BUILD_CONFIG[BRANCH]} | grep standard`" ]; then
+    PRODUCT_HOME=$(ls -d ${PWD}/build/*/images/${BUILD_CONFIG[JDK_PATH]})
+    libjvm_path=$(find ${PRODUCT_HOME} -iname libjvm.so)
+    if [ "$(arch)" = "aarch64" ]; then
+      wget https://dragonwell.oss-cn-shanghai.aliyuncs.com/tools/signutil-aarch64 -O signutil
+    else
+      wget https://dragonwell.oss-cn-shanghai.aliyuncs.com/tools/signutil -O signutil
+    fi
+    chmod +x signutil
+    ./signutil sign ~/sk.bin ${libjvm_path}
+    ./signutil verify ~/pk.bin ${libjvm_path}
+  fi
 }
 
 createOpenJDKFailureLogsArchive() {
