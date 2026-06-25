@@ -533,6 +533,10 @@ configureCommandParameters() {
     sed -i "s/JAVADOC =/&@FIXPATH@/" "${makefile}"
     sed -i "s/JAR =/&@FIXPATH@/" "${makefile}"
     cat ${makefile}
+    cd ${BUILD_CONFIG[WORKSPACE_DIR]}/${BUILD_CONFIG[WORKING_DIR]}/${BUILD_CONFIG[OPENJDK_SOURCE_DIR]}
+    git clone https://github.com/google/googletest.git
+    addConfigureArg "--with-gtest=" "${BUILD_CONFIG[WORKSPACE_DIR]}/${BUILD_CONFIG[WORKING_DIR]}/${BUILD_CONFIG[OPENJDK_SOURCE_DIR]}/googletest"
+    cd -
   fi
   configureVersionStringParameter
   configureBootJDKConfigureParameter
