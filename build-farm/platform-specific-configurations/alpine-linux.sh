@@ -28,7 +28,7 @@ fi
 # ccache seems flaky on alpine
 export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --disable-ccache"
 
-if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "${JAVA_TO_BUILD}" = "jdk21u" ] || [ "${VARIANT}" != "${BUILD_VARIANT_DRAGONWELL}" ]; then
+if [[ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" && ("${JAVA_TO_BUILD}" = "jdk21u" || "${JAVA_TO_BUILD}" = "jdk25u") ]] || [ "${VARIANT}" != "${BUILD_VARIANT_DRAGONWELL}" ]; then
 OOT_JDK_VERSION="$((JAVA_FEATURE_VERSION-1))"
 BOOT_JDK_VARIABLE="JDK$(echo $BOOT_JDK_VERSION)_BOOT_DIR"
 # We don't bundle freetype on alpine anymore, and expect the user to have it.
