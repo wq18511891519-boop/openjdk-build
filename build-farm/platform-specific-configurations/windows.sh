@@ -146,7 +146,11 @@ then
       export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --disable-ccache"
     elif [ "$JAVA_FEATURE_VERSION" -gt 11 ]
     then
-      TOOLCHAIN_VERSION="2019"
+      if [ "${JAVA_TO_BUILD}" = "jdk21u" ];then
+        TOOLCHAIN_VERSION="2022"
+      else
+        TOOLCHAIN_VERSION="2019"
+      fi
       export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --disable-ccache"
     fi
   fi
@@ -176,7 +180,11 @@ then
       export BUILD_ARGS="${BUILD_ARGS} --freetype-version 2.5.3"
     elif [ "$JAVA_FEATURE_VERSION" -ge 11 ]
     then
-      TOOLCHAIN_VERSION="2019"
+      if [ "${JAVA_TO_BUILD}" = "jdk21u" ];then
+        TOOLCHAIN_VERSION="2022"
+      else
+        TOOLCHAIN_VERSION="2019"
+      fi
       export BUILD_ARGS="${BUILD_ARGS} --skip-freetype"
     fi
 
@@ -211,7 +219,11 @@ then
       export PATH="/cygdrive/c/openjdk/make-3.82/:$PATH"
     elif [ "$JAVA_FEATURE_VERSION" -ge 11 ]
     then
-      TOOLCHAIN_VERSION="2019"
+      if [ "${JAVA_TO_BUILD}" = "jdk21u" ];then
+        TOOLCHAIN_VERSION="2022"
+      else
+        TOOLCHAIN_VERSION="2019"
+      fi
     fi
   fi
 
