@@ -138,6 +138,10 @@ configureMacOSCodesignParameter() {
     # This command needs to escape the double quotes because they are needed to preserve the spaces in the codesign cert name
     addConfigureArg "--with-macosx-codesign-identity=" "\"${BUILD_CONFIG[MACOSX_CODESIGN_IDENTITY]}\""
   fi
+  if [[ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_DRAGONWELL}" ]] && [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "jdk21" ]; then
+    #local macos_bundle_build_version=0
+    addConfigureArg "--with-macosx-bundle-build-version=" "0"
+  fi
 }
 
 # Get the OpenJDK update version and build version
