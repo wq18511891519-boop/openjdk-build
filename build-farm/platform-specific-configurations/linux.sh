@@ -1,93 +1,276 @@
 #!/bin/bash
 # shellcheck disable=SC1091
-# ********************************************************************************
-# Copyright (c) 2018 Contributors to the Eclipse Foundation
+
+################################################################################
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# See the NOTICE file(s) with this work for additional
-# information regarding copyright ownership.
+#      https://www.apache.org/licenses/LICENSE-2.0
 #
-# This program and the accompanying materials are made
-# available under the terms of the Apache Software License 2.0
-# which is available at https://www.apache.org/licenses/LICENSE-2.0.
-#
-# SPDX-License-Identifier: Apache-2.0
-# ********************************************************************************
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # shellcheck source=sbin/common/constants.sh
 source "$SCRIPT_DIR/../../sbin/common/constants.sh"
-source "$SCRIPT_DIR/../../sbin/common/downloaders.sh"
 
-## This affects Alpine docker images and also evaluation pipelines
-if [ "$(pwd | wc -c)" -gt 83 ]; then
-  # Use /tmp for alpine in preference to $HOME as Alpine fails gpg operation if PWD > 83 characters
-  # Alpine also cannot create ~/.gpg-temp within a docker context
-  GNUPGHOME="$(mktemp -d /tmp/.gpg-temp.XXXXXX)"
-else
-  GNUPGHOME="${WORKSPACE:-$PWD}/.gpg-temp"
-fi
-if [ ! -d "$GNUPGHOME" ]; then
-    mkdir -m 700 "$GNUPGHOME"
-fi
-export GNUPGHOME
+# Bundling our own freetype can cause problems, so we skip that on linux.
+export BUILD_ARGS="${BUILD_ARGS} --skip-freetype"
 
 NATIVE_API_ARCH=$(uname -m)
 if [ "${NATIVE_API_ARCH}" = "x86_64" ]; then NATIVE_API_ARCH=x64; fi
 if [ "${NATIVE_API_ARCH}" = "armv7l" ]; then NATIVE_API_ARCH=arm; fi
 
-function locateDragonwell8BootJDK()
-{
+if [ "${ARCHITECTURE}" == "x64" ]
+then
+  export PATH=/opt/rh/devtoolset-2/root/usr/bin:$PATH
+fi
+
+if [ "${ARCHITECTURE}" == "s390x" ]
+then
+  export LANG=C
+
+  if [ "${VARIANT}" == "${BUILD_VARIANT_OPENJ9}" ]
+  then
+    # Any version below 11
+    if [ "$JAVA_FEATURE_VERSION" -lt 11 ]
+    then
+      if which g++-4.8; then
+        export CC=gcc-4.8
+        export CXX=g++-4.8
+      fi
+    fi
+  fi
+fi
+
+if [ "${VARIANT}" == "${BUILD_VARIANT_OPENJ9}" ]
+then
+  # OpenJ9 fetches the latest OpenSSL in their get_source.sh
+  export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-openssl=fetched"
+
+  if [ "${ARCHITECTURE}" == "ppc64le" ] || [ "${ARCHITECTURE}" == "x64" ]
+  then
+    CUDA_VERSION=9.0
+    CUDA_HOME=/usr/local/cuda-$CUDA_VERSION
+    if [ -f $CUDA_HOME/include/cuda.h ]
+    then
+      export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --enable-cuda --with-cuda=$CUDA_HOME"
+    fi
+  fi
+fi
+
+if [ "${ARCHITECTURE}" == "ppc64le" ]
+then
+  export LANG=C
+fi
+
+# Solves issues seen on 4GB HC4 systems with two large ld processes
+if [ "$(awk '/^MemTotal:/{print$2}' < /proc/meminfo)" -lt "5000000" ]
+then
+  export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-extra-ldflags=-Wl,--no-keep-memory"
+fi
+
+if [ "${ARCHITECTURE}" == "arm" ]
+then
+  if lscpu | grep aarch64; then
+     echo Validating 32-bit environment on 64-bit host - perhaps it is a docker container ...
+     if ! file /bin/ls | grep "32-bit.*ARM"; then
+       echo /bin/ls is not a 32-bit binary but ARCHITECTURE=arm. Non-32-bit userland is invalid without extra work
+       exit 1
+     fi
+     echo Looks reasonable - configuring to allow building that way ...
+     export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --target=armv7l-unknown-linux-gnueabihf --host=armv7l-unknown-linux-gnueabihf"
+  fi
+  # "4" is a temporary override which allows us to utilise all build
+  # cores on our scaleway systems while they are still in use but still
+  # allow more on larger machines. Can be revisited post-Scaleway
+  if [ "$(lscpu|awk '/^CPU\(s\)/{print$2}')" = "4" ]; then
+    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-jobs=4 --with-memory-size=2000"
+  fi
+  if [ "$JAVA_FEATURE_VERSION" -eq 8 ]; then
+    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-extra-ldflags=-latomic"
+  fi
+  if [ "$JAVA_FEATURE_VERSION" -ge 11 ]; then
+    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --disable-warnings-as-errors"
+  fi
+  if [ -n "${NUM_PROCESSORS}" ]
+  then
+    export BUILD_ARGS="${BUILD_ARGS} --processors $NUM_PROCESSORS"
+  fi
+  echo "=== START OF ARM32 STATUS CHECK ==="
+  uptime
+  free
+  ps -fu jenkins
+  echo "=== END OF ARM32 STATUS CHECK ==="
+fi
+
+BOOT_JDK_VARIABLE="JDK${JDK_BOOT_VERSION}_BOOT_DIR"
+if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION" -eq 8 ]; then
   if [ -d /opt/dragonwell8 ]; then
     export "${BOOT_JDK_VARIABLE}"=/opt/dragonwell8
   elif [ -d /usr/lib/jvm/dragonwell8 ]; then
     export "${BOOT_JDK_VARIABLE}"=/usr/lib/jvm/dragonwell8
   else
     echo Dragonwell 8 requires a Dragonwell boot JDK - downloading one ...
-    mkdir -p "$PWD/jdk8"
-    # if [ "$(uname -m)" = "x86_64" ]; then
-    #   curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.11.12_jdk8u332-ga/Alibaba_Dragonwell_8.11.12_x64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk8"
-    # elif [ "$(uname -m)" = "aarch64" ]; then
-    #   curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.8.9_jdk8u302-ga/Alibaba_Dragonwell_8.8.9_aarch64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk8"
-    # else
-    #   echo "Unknown architecture $(uname -m) for building Dragonwell - cannot download boot JDK"
-    #   exit 1
-    # fi
-    ## Secure Dragonwell Downloads By Validating Checksums
+    mkdir -p "$PWD/jdk-8"
     if [ "$(uname -m)" = "x86_64" ]; then
-      DOWNLOAD_URL="https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.11.12_jdk8u332-ga/Alibaba_Dragonwell_8.11.12_x64_linux.tar.gz"
-      EXPECTED_SHA256="E03923f200dffddf9eee2aadc0c495674fe0b87cc2eece94a9a8dec84812d12bd"
+      curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.11.12_jdk8u332-ga/Alibaba_Dragonwell_8.11.12_x64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk-8"
     elif [ "$(uname -m)" = "aarch64" ]; then
-      DOWNLOAD_URL="https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.8.9_jdk8u302-ga/Alibaba_Dragonwell_8.8.9_aarch64_linux.tar.gz"
-      EXPECTED_SHA256="ff0594f36d13883972ca0b302d35cca5099f10b8be54c70c091f626e4e308774"
+      curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.8.9_jdk8u302-ga/Alibaba_Dragonwell_8.8.9_aarch64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk-8"
     else
       echo "Unknown architecture $(uname -m) for building Dragonwell - cannot download boot JDK"
       exit 1
     fi
-    # Download the file and calculate its SHA256 checksum
-    TMP_FILE=$(mktemp)
-    curl -L "$DOWNLOAD_URL" -o "$TMP_FILE"
-
-    # Calculate the SHA256 checksum of the downloaded file
-    ACTUAL_SHA256=$(sha256sum "$TMP_FILE" | awk '{print $1}')
-
-    # Compare the actual and expected SHA256 checksums
-    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-      echo "Checksum verification failed for downloaded file!"
-      rm "$TMP_FILE"
-      exit 1
-    fi
-
-    # Extract the downloaded file
-    tar xpzf "$TMP_FILE" --strip-components=1 -C "$PWD/jdk8"
-
-    # Clean up the temporary file
-    rm "$TMP_FILE"
-    export "${BOOT_JDK_VARIABLE}"="$PWD/jdk8"
+    export "${BOOT_JDK_VARIABLE}"="$PWD/jdk-8"
   fi
-}
+fi
 
-function setCrossCompilerEnvironment()
-{
+if [ ! -d "$(eval echo "\$$BOOT_JDK_VARIABLE")" ]; then
+  bootDir="$PWD/jdk-$JDK_BOOT_VERSION"
+  # Note we export $BOOT_JDK_VARIABLE (i.e. JDKXX_BOOT_DIR) here
+  # instead of BOOT_JDK_VARIABLE (no '$').
+  export "${BOOT_JDK_VARIABLE}"="$bootDir"
+  if [ ! -x "$bootDir/bin/javac" ]; then
+    # Set to a default location as linked in the ansible playbooks
+    if [ -x "/usr/lib/jvm/jdk-${JDK_BOOT_VERSION}/bin/javac" ]; then
+      echo "Could not use ${BOOT_JDK_VARIABLE} - using /usr/lib/jvm/jdk-${JDK_BOOT_VERSION}"
+      # shellcheck disable=SC2140
+      export "${BOOT_JDK_VARIABLE}"="/usr/lib/jvm/jdk-${JDK_BOOT_VERSION}"
+    elif [ "$JDK_BOOT_VERSION" -ge 8 ]; then # Adoptium has no build pre-8
+      mkdir -p "$bootDir"
+      export downloadArch
+      case "$ARCHITECTURE" in
+         "riscv64") downloadArch="$NATIVE_API_ARCH";;
+                 *) downloadArch="$ARCHITECTURE";;
+      esac
+      releaseType="ga"
+      vendor="eclipse"
+      apiUrlTemplate="https://api.adoptium.net/v3/binary/latest/\${JDK_BOOT_VERSION}/\${releaseType}/linux/\${downloadArch}/jdk/hotspot/normal/\${vendor}"
+      apiURL=$(eval echo ${apiUrlTemplate})
+      echo "Downloading GA release of boot JDK version ${JDK_BOOT_VERSION} from ${apiURL}"
+      # make-adopt-build-farm.sh has 'set -e'. We need to disable that for
+      # the fallback mechanism, as downloading of the GA binary might fail.
+      set +e
+      curl -L "${apiURL}" | tar xpzf - --strip-components=1 -C "$bootDir"
+      retVal=$?
+      set -e
+      if [ $retVal -ne 0 ]; then
+        # We must be a JDK HEAD build for which no boot JDK exists other than
+        # nightlies?
+        echo "Downloading GA release of boot JDK version ${JDK_BOOT_VERSION} failed."
+        # shellcheck disable=SC2034
+        releaseType="ea"
+        # shellcheck disable=SC2034
+        vendor="adoptium"
+        apiURL=$(eval echo ${apiUrlTemplate})
+        echo "Attempting to download EA release of boot JDK version ${JDK_BOOT_VERSION} from ${apiURL}"
+        set +e
+        curl -L "${apiURL}" | tar xpzf - --strip-components=1 -C "$bootDir"
+        retVal=$?
+        set -e
+        if [ $retVal -ne 0 ]; then
+          # If no binaries are available then try from adoptopenjdk
+          echo "Downloading Temurin release of boot JDK version ${JDK_BOOT_VERSION} failed."
+          # shellcheck disable=SC2034
+          releaseType="ga"
+          # shellcheck disable=SC2034
+          vendor="adoptium"
+          apiURL=$(eval echo ${apiUrlTemplate})
+          echo "Attempting to download GA release of boot JDK version ${JDK_BOOT_VERSION} from ${apiURL}"
+          curl -L "${apiURL}" | tar xpzf - --strip-components=1 -C "$bootDir"
+        fi
+      fi
+    fi
+  fi
+fi
+
+# shellcheck disable=SC2155
+export JDK_BOOT_DIR="$(eval echo "\$$BOOT_JDK_VARIABLE")"
+"$JDK_BOOT_DIR/bin/java" -version 2>&1 | sed 's/^/BOOT JDK: /'
+"$JDK_BOOT_DIR/bin/java" -version >/dev/null 2>&1
+executedJavaVersion=$?
+if [ $executedJavaVersion -ne 0 ]; then
+    echo "Failed to obtain or find a valid boot jdk"
+    exit 1
+fi
+
+#if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION" -eq 11 ] && [ -r /usr/local/gcc-9.3.0/ ]; then
+#  export PATH=/usr/local/gcc-9.3.0/bin:$PATH
+#  export CC=/usr/local/gcc-9.3.0/bin/gcc
+#  export CXX=/usr/local/gcc-9.3.0/bin/g++
+if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION" -eq 11 ] && [ -r /usr/local/gcc9/ ] && [ "${ARCHITECTURE}" == "aarch64" ]; then
+  # GCC9 rather than 10 requested by Alibaba for now
+  # Ref https://github.com/adoptium/temurin-build/issues/2250#issuecomment-732958466
+  export PATH=/usr/local/gcc9/bin:$PATH
+  export CC=/usr/local/gcc9/bin/gcc-9.3
+  export CXX=/usr/local/gcc9/bin/g++-9.3
+  # Enable GCC 10 for Java 17+ for repeatable builds, but not for our supported releases
+  # Ref https://github.com/adoptium/temurin-build/issues/2787
+elif [ "$JAVA_FEATURE_VERSION" -ge 25 ]; then
+  if [ "$(arch)" = "x86_64" ]; then
+    wget -q https://github.com/adoptium/devkit-binaries/releases/download/gcc-14.2.0-Centos7.9.2009-b00/devkit-gcc-14.2.0-Centos7.9.2009-b00-x86_64-linux-gnu.tar.xz -O devkit-gcc.tar.xz
+    mkdir -p /usr/local/gcc14
+    tar xf devkit-gcc.tar.xz -C /usr/local/gcc14/
+    rm -rf devkit-gcc.tar.xz
+    export  CC=/usr/local/gcc14/bin/gcc-14.2.0
+    export CXX=/usr/local/gcc14/bin/g++-14.2.0
+    export PATH=/usr/local/gcc14/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/gcc14/lib64:/usr/local/gcc14/lib
+  elif [ "$(arch)" = "aarch64" ]; then
+    export PATH=/usr/local/gcc11/bin:$PATH
+    [ -r /usr/local/gcc11/bin/gcc-11.2 ] && export  CC=/usr/local/gcc11/bin/gcc-11.2
+    [ -r /usr/local/gcc11/bin/g++-11.2 ] && export CXX=/usr/local/gcc11/bin/g++-11.2
+    export LD_LIBRARY_PATH=/usr/local/gcc11/lib64:/usr/local/gcc11/lib
+  fi
+elif [ "$JAVA_FEATURE_VERSION" -ge 19 ] && [ -r /usr/local/gcc11/bin/gcc-11.2 ]; then
+  export PATH=/usr/local/gcc11/bin:$PATH
+  [ -r /usr/local/gcc11/bin/gcc-11.2 ] && export  CC=/usr/local/gcc11/bin/gcc-11.2
+  [ -r /usr/local/gcc11/bin/g++-11.2 ] && export CXX=/usr/local/gcc11/bin/g++-11.2
+  export LD_LIBRARY_PATH=/usr/local/gcc11/lib64:/usr/local/gcc11/lib
+elif [ "$JAVA_FEATURE_VERSION" -ge 17 ] && [ -r /usr/local/gcc10/bin/gcc-10.3 ]; then
+  export PATH=/usr/local/gcc10/bin:$PATH
+  [ -r /usr/local/gcc10/bin/gcc-10.3 ] && export  CC=/usr/local/gcc10/bin/gcc-10.3
+  [ -r /usr/local/gcc10/bin/g++-10.3 ] && export CXX=/usr/local/gcc10/bin/g++-10.3
+  export LD_LIBRARY_PATH=/usr/local/gcc10/lib64:/usr/local/gcc10/lib
+elif [ "$JAVA_FEATURE_VERSION" -gt 17 ] && [ -r /usr/bin/gcc-10 ]; then
+  [ -r /usr/bin/gcc-10 ] && export  CC=/usr/bin/gcc-10
+  [ -r /usr/bin/g++-10 ] && export CXX=/usr/bin/g++-10
+# Continue to use GCC 7 if present for JDK<=17 and where 10 does not exist
+elif [ -r /usr/local/gcc/bin/gcc-7.5 ]; then
+  export PATH=/usr/local/gcc/bin:$PATH
+  [ -r /usr/local/gcc/bin/gcc-7.5 ] && export  CC=/usr/local/gcc/bin/gcc-7.5
+  [ -r /usr/local/gcc/bin/g++-7.5 ] && export CXX=/usr/local/gcc/bin/g++-7.5
+  export LD_LIBRARY_PATH=/usr/local/gcc/lib64:/usr/local/gcc/lib
+elif [ -r /usr/bin/gcc-7 ]; then
+  [ -r /usr/bin/gcc-7 ] && export  CC=/usr/bin/gcc-7
+  [ -r /usr/bin/g++-7 ] && export CXX=/usr/bin/g++-7
+fi
+
+if [ "${VARIANT}" == "${BUILD_VARIANT_BISHENG}" ]; then
+  # BUILD_C/CXX required for native (non-cross) RISC-V builds of Bisheng
+  if [ -n "$CXX" ]; then
+    export BUILD_CC="$CC"
+    export BUILD_CXX="$CXX"
+  fi
+  # Bisheng on aarch64 has a KAE option which requires openssl 1.1.1 to be used
+  BISHENG_OPENSSL_111_LOCATION=${BISHENG_OPENSSL_111_LOCATION:-/usr/local/openssl-1.1.1}
+  if [ -x "${BISHENG_OPENSSL_111_LOCATION}/lib/libcrypto.so.1.1" ]; then
+    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-extra-cflags=-I${BISHENG_OPENSSL_111_LOCATION}/include  --with-extra-cxxflags=-I${BISHENG_OPENSSL_111_LOCATION}/include --with-extra-ldflags=-L${BISHENG_OPENSSL_111_LOCATION}/lib"
+  fi
+fi
+
+# Handle cross compilation environment for RISC-V
+NATIVE_API_ARCH=$(uname -m)
+if [ "${NATIVE_API_ARCH}" = "x86_64" ]; then NATIVE_API_ARCH=x64; fi
+if [ "${NATIVE_API_ARCH}" = "armv7l" ]; then NATIVE_API_ARCH=arm; fi
+
+
+if [ "${ARCHITECTURE}" == "riscv64" ] && [ "${NATIVE_API_ARCH}" != "riscv64" ]; then
   if [ "${VARIANT}" == "${BUILD_VARIANT_OPENJ9}" ]; then
     export BUILDJDK=${WORKSPACE:-$PWD}/buildjdk
     echo "RISCV cross-compilation for OpenJ9 ... Downloading required nightly OpenJ9/${NATIVE_API_ARCH} as build JDK to $BUILDJDK"
@@ -148,7 +331,7 @@ function setCrossCompilerEnvironment()
       # don't download it if we already have it from a previous build
       if [ ! -x "$WORKSPACE/qemu-riscv64-static" ]; then
         echo Download qemu-riscv64-static as it is required for the OpenJ9 cross build ...
-        curl https://ci.adoptium.net/userContent/riscv/qemu-riscv64-static.xz | xz -d > "$WORKSPACE/qemu-riscv64-static" && \
+        curl https://ci.adoptopenjdk.net/userContent/riscv/qemu-riscv64-static.xz | xz -d > "$WORKSPACE/qemu-riscv64-static" && \
         chmod 755 "$WORKSPACE/qemu-riscv64-static"
       fi
       export PATH="$PATH:$WORKSPACE" && \
@@ -164,197 +347,4 @@ function setCrossCompilerEnvironment()
     echo "RISC-V cross compiler CXX=$CXX does not exist on this system - cannot continue"
     exit 1
   fi
-}
-
-if [ "${ARCHITECTURE}" == "x64" ]
-then
-  export PATH=/opt/rh/devtoolset-2/root/usr/bin:$PATH
-fi
-
-## Fix For Issue https://github.com/adoptium/temurin-build/issues/3547
-## Add Missing Library Path For Ubuntu 22+
-if [ -e /etc/os-release ]; then
-  ID=$(grep "^ID=" /etc/os-release | awk -F'=' '{print $2}')
-  INT_VERSION_ID=$(grep "^VERSION_ID=" /etc/os-release | awk -F'"' '{print $2}' | awk -F'.' '{print $1}')
-  LIB_ARCH=$(uname -m)-linux-gnu
-  if [ "$ID" == "ubuntu" ] && [ "$INT_VERSION_ID" -ge "22" ]; then
-      export LIBRARY_PATH=/usr/lib/$LIB_ARCH:$LIBRARY_PATH
-  fi
-fi
-
-if [ "${ARCHITECTURE}" == "s390x" ]
-then
-  export LANG=C
-
-  if [ "${VARIANT}" == "${BUILD_VARIANT_OPENJ9}" ]
-  then
-    # Any version below 11
-    if [ "$JAVA_FEATURE_VERSION" -lt 11 ]
-    then
-      if which g++-4.8; then
-        export CC=gcc-4.8
-        export CXX=g++-4.8
-      fi
-    fi
-  fi
-fi
-
-if [ "${VARIANT}" == "${BUILD_VARIANT_OPENJ9}" ]
-then
-  # OpenJ9 fetches the latest OpenSSL in their get_source.sh
-  export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-openssl=fetched"
-
-  if [ "${ARCHITECTURE}" == "ppc64le" ] || [ "${ARCHITECTURE}" == "x64" ]
-  then
-    CUDA_HOME=/usr/local/cuda
-    if [ -f $CUDA_HOME/include/cuda.h ]
-    then
-      export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --enable-cuda --with-cuda=$CUDA_HOME"
-    fi
-  fi
-fi
-
-if [ "${ARCHITECTURE}" == "ppc64le" ]
-then
-  export LANG=C
-fi
-
-# Solves issues seen on 4GB HC4 systems with two large ld processes
-if [ "$(awk '/^MemTotal:/{print$2}' < /proc/meminfo)" -lt "5000000" ]
-then
-  export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-extra-ldflags=-Wl,--no-keep-memory"
-fi
-
-if [ "${ARCHITECTURE}" == "arm" ]
-then
-  if lscpu | grep aarch64; then
-     echo Validating 32-bit environment on 64-bit host - perhaps it is a docker container ...
-     if ! file /bin/ls | grep "32-bit.*ARM"; then
-       echo /bin/ls is not a 32-bit binary but ARCHITECTURE=arm. Non-32-bit userland is invalid without extra work
-       exit 1
-     fi
-     echo Looks reasonable - configuring to allow building that way ...
-     export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --target=armv7l-unknown-linux-gnueabihf --host=armv7l-unknown-linux-gnueabihf"
-  fi
-  # "4" is a temporary override which allows us to utilise all build
-  # cores on our scaleway systems while they are still in use but still
-  # allow more on larger machines. Can be revisited post-Scaleway
-  if [ "$(lscpu|awk '/^CPU\(s\)/{print$2}')" = "4" ]; then
-    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-jobs=4 --with-memory-size=2000"
-  fi
-  if [ "$JAVA_FEATURE_VERSION" -eq 8 ]; then
-    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-extra-ldflags=-latomic"
-  fi
-  if [ "$JAVA_FEATURE_VERSION" -ge 11 ]; then
-    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --disable-warnings-as-errors"
-  fi
-  if [ -n "${NUM_PROCESSORS}" ]
-  then
-    export BUILD_ARGS="${BUILD_ARGS} --processors $NUM_PROCESSORS"
-  fi
-  echo "=== START OF ARM32 STATUS CHECK ==="
-  uptime
-  free
-  ps -fu jenkins
-  echo "=== END OF ARM32 STATUS CHECK ==="
-fi
-
-# Disable PCH (precompiled-headers) for jdk-21+ Temurin builds, to ensure deterministic reproducible builds
-# ref: https://github.com/adoptium/temurin-build/issues/4401
-if [ "${VARIANT}" == "${BUILD_VARIANT_TEMURIN}" ] && [ "$JAVA_FEATURE_VERSION" -ge 21 ];
-then
-  echo "Disabling precompiled headers as this may introduce non-deterministic PCH gch binaries, especially if ASLR is enabled, see: https://gcc.gnu.org/onlinedocs/gcc/Precompiled-Headers.html and https://github.com/adoptium/temurin-build/issues/4401"
-  export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --disable-precompiled-headers"
-fi
-
-BOOT_JDK_VARIABLE="JDK${JDK_BOOT_VERSION}_BOOT_DIR"
-if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION" -eq 8 ]; then
-  locateDragonwell8BootJDK
-fi
-
-if [ ! -d "$(eval echo "\$$BOOT_JDK_VARIABLE")" ]; then
-  bootDir="$PWD/jdk$JDK_BOOT_VERSION"
-  # Note we export $BOOT_JDK_VARIABLE (i.e. JDKXX_BOOT_DIR) here
-  # instead of BOOT_JDK_VARIABLE (no '$').
-  export "${BOOT_JDK_VARIABLE}"="$bootDir"
-  if [ ! -x "$bootDir/bin/javac" ]; then
-    # Set to a default location as linked in the ansible playbooks
-    if [ -x "/usr/lib/jvm/jdk${JDK_BOOT_VERSION}/bin/javac" ]; then
-      echo "Could not use ${BOOT_JDK_VARIABLE} - using /usr/lib/jvm/jdk${JDK_BOOT_VERSION}"
-      # shellcheck disable=SC2140
-      export "${BOOT_JDK_VARIABLE}"="/usr/lib/jvm/jdk${JDK_BOOT_VERSION}"
-    elif [ "$JDK_BOOT_VERSION" -ge 8 ]; then # Adoptium has no build pre-8
-      downloadLinuxBootJDK "${ARCHITECTURE}" "${JDK_BOOT_VERSION}" "$bootDir"
-    fi
-  fi
-fi
-
-# shellcheck disable=SC2155
-export JDK_BOOT_DIR="$(eval echo "\$$BOOT_JDK_VARIABLE")"
-"$JDK_BOOT_DIR/bin/java" -version 2>&1 | sed 's/^/BOOT JDK: /'
-"$JDK_BOOT_DIR/bin/java" -version >/dev/null 2>&1
-executedJavaVersion=$?
-if [ $executedJavaVersion -ne 0 ]; then
-    echo "Failed to obtain or find a valid boot jdk"
-    exit 1
-fi
-
-if [[ "${CONFIGURE_ARGS}" =~ .*"--with-devkit=".* ]]; then
-  echo "Using gcc from DevKit toolchain specified in configure args"
-elif [[ "${BUILD_ARGS}" =~ .*"--use-adoptium-devkit".* ]]; then
-  echo "Using gcc from Adoptium DevKit toolchain specified in --use-adoptium-devkit build args"
-else
-  if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION" -eq 11 ] && [ -r /usr/local/gcc9/ ] && [ "${ARCHITECTURE}" == "aarch64" ]; then
-    # GCC9 rather than 10 requested by Alibaba for now
-    # Ref https://github.com/adoptium/temurin-build/issues/2250#issuecomment-732958466
-    export PATH=/usr/local/gcc9/bin:$PATH
-    export CC=/usr/local/gcc9/bin/gcc-9.3
-    export CXX=/usr/local/gcc9/bin/g++-9.3
-    # Enable GCC 10 for Java 17+ for repeatable builds, but not for our supported releases
-    # Ref https://github.com/adoptium/temurin-build/issues/2787
-  elif [ "${ARCHITECTURE}" == "riscv64" ] && [ -r /usr/bin/gcc-10 ]; then
-    # Enable GCC 10 for RISC-V, given the rapid evolution of RISC-V, the newer the GCC toolchain, the better
-    [ -r /usr/bin/gcc-10 ] && export  CC=/usr/bin/gcc-10
-    [ -r /usr/bin/g++-10 ] && export CXX=/usr/bin/g++-10
-  elif [ "$JAVA_FEATURE_VERSION" -ge 19 ] && [ -r /usr/local/gcc11/bin/gcc-11.2 ]; then
-    export PATH=/usr/local/gcc11/bin:$PATH
-    [ -r /usr/local/gcc11/bin/gcc-11.2 ] && export  CC=/usr/local/gcc11/bin/gcc-11.2
-    [ -r /usr/local/gcc11/bin/g++-11.2 ] && export CXX=/usr/local/gcc11/bin/g++-11.2
-    export LD_LIBRARY_PATH=/usr/local/gcc11/lib64:/usr/local/gcc11/lib
-  elif [ "$JAVA_FEATURE_VERSION" -ge 17 ] && [ -r /usr/local/gcc10/bin/gcc-10.3 ]; then
-    export PATH=/usr/local/gcc10/bin:$PATH
-    [ -r /usr/local/gcc10/bin/gcc-10.3 ] && export  CC=/usr/local/gcc10/bin/gcc-10.3
-    [ -r /usr/local/gcc10/bin/g++-10.3 ] && export CXX=/usr/local/gcc10/bin/g++-10.3
-    export LD_LIBRARY_PATH=/usr/local/gcc10/lib64:/usr/local/gcc10/lib
-  elif [ "$JAVA_FEATURE_VERSION" -gt 17 ] && [ -r /usr/bin/gcc-10 ]; then
-    [ -r /usr/bin/gcc-10 ] && export  CC=/usr/bin/gcc-10
-    [ -r /usr/bin/g++-10 ] && export CXX=/usr/bin/g++-10
-  # Continue to use GCC 7 if present for JDK<=17 and where 10 does not exist
-  elif [ -r /usr/local/gcc/bin/gcc-7.5 ]; then
-    export PATH=/usr/local/gcc/bin:$PATH
-    [ -r /usr/local/gcc/bin/gcc-7.5 ] && export  CC=/usr/local/gcc/bin/gcc-7.5
-    [ -r /usr/local/gcc/bin/g++-7.5 ] && export CXX=/usr/local/gcc/bin/g++-7.5
-    export LD_LIBRARY_PATH=/usr/local/gcc/lib64:/usr/local/gcc/lib
-  elif [ -r /usr/bin/gcc-7 ]; then
-    [ -r /usr/bin/gcc-7 ] && export  CC=/usr/bin/gcc-7
-    [ -r /usr/bin/g++-7 ] && export CXX=/usr/bin/g++-7
-  fi
-fi
-
-if [ "${VARIANT}" == "${BUILD_VARIANT_BISHENG}" ]; then
-  # BUILD_C/CXX required for native (non-cross) RISC-V builds of Bisheng
-  if [ -n "$CXX" ]; then
-    export BUILD_CC="$CC"
-    export BUILD_CXX="$CXX"
-  fi
-  # Bisheng on aarch64 has a KAE option which requires openssl 1.1.1 to be used
-  BISHENG_OPENSSL_111_LOCATION=${BISHENG_OPENSSL_111_LOCATION:-/usr/local/openssl-1.1.1}
-  if [ -x "${BISHENG_OPENSSL_111_LOCATION}/lib/libcrypto.so.1.1" ]; then
-    export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-extra-cflags=-I${BISHENG_OPENSSL_111_LOCATION}/include  --with-extra-cxxflags=-I${BISHENG_OPENSSL_111_LOCATION}/include --with-extra-ldflags=-L${BISHENG_OPENSSL_111_LOCATION}/lib"
-  fi
-fi
-
-# Handle cross compilation environment for RISC-V
-if [ "${ARCHITECTURE}" == "riscv64" ] && [ "${NATIVE_API_ARCH}" != "riscv64" ]; then
-  setCrossCompilerEnvironment
 fi
