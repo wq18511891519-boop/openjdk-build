@@ -30,8 +30,8 @@ class Config11 {
                 test                : 'default',
                 test                : [
                         // TODO: enable tests
-                        nightly: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external'],
-                        release: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external']
+                        nightly: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external', 'special.openjdk'],
+                        release: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external', 'special.openjdk']
                 ],
                 configureArgs       : [
                         "openj9"      : '--enable-jitserver --enable-dtrace=auto',
@@ -39,7 +39,6 @@ class Config11 {
                         "corretto"    : '--enable-dtrace=auto',
                         "SapMachine"  : '--enable-dtrace=auto',
                         "dragonwell"  : '--enable-dtrace=auto --enable-unlimited-crypto --with-jvm-variants=server --with-zlib=system --with-jvm-features=zgc'
-                        "fast_startup": '--enable-dtrace=auto --with-jvm-variants=server',
                 ]
         ],
 
@@ -129,11 +128,7 @@ class Config11 {
                 os                  : 'linux',
                 arch                : 'aarch64',
                 dockerImage         : 'joeylee97/dragonwell_centos7_gcc9_build_image',
-                test                 : [
-                        // TODO: enable tests
-                        nightly: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external'],
-                        release: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external']
-                ],
+                test                : 'default',
                 configureArgs       : [
                         "hotspot" : '--enable-dtrace=auto',
                         "openj9" : '--enable-dtrace=auto',
@@ -172,11 +167,7 @@ class Config11 {
                 os                   : 'linux',
                 dockerImage          : 'adoptopenjdk/centos7_build_image',
                 arch                 : 'aarch64',
-                test                 : [
-                        // TODO: enable tests
-                        nightly: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external'],
-                        release: ['sanity.openjdk', 'sanity.system', 'extended.system', 'sanity.perf', 'sanity.external']
-                ],
+                test                 : 'default',
                 additionalFileNameTag: "linuxXL",
                 configureArgs        : '--with-noncompressedrefs --enable-dtrace=auto'
         ],
