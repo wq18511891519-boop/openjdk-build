@@ -449,8 +449,9 @@ configureVersionStringParameter() {
         addConfigureArgIfValueIsNotEmpty "--with-version-patch=" "${dragonwellPatch}"
       fi
     else
-      local version_string=${openJdkVersion%.*}
-      version_string=$(echo ${version_string%.*} | cut -d '-' -f 2)
+      #local version_string=${openJdkVersion%.*}
+      #version_string=$(echo ${version_string%.*} | cut -d '-' -f 2)
+      local version_string=$(echo ${openJdkVersion%%+*} | cut -d '-' -f 2)
       addConfigureArgIfValueIsNotEmpty "--with-version-string=" "\"${version_string}\""
     fi
   fi
