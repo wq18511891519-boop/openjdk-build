@@ -26,7 +26,7 @@ export LANG=C
 export OPENJ9_NASM_VERSION=2.13.03
 
 TOOLCHAIN_VERSION=""
-if [ "${VARIANT}" != "${BUILD_VARIANT_DRAGONWELL}" ]; then
+if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "${JAVA_TO_BUILD}" = "jdk21u" ] || [ "${VARIANT}" != "${BUILD_VARIANT_DRAGONWELL}" ]; then
 if [ "$ARCHITECTURE" == "aarch64" ] && [ "$JAVA_FEATURE_VERSION" == 16 ]; then
   # Windows aarch64 jdk16 cross compiles requires same version boot jdk
   BOOT_JDK_VERSION="$((JAVA_FEATURE_VERSION))"
