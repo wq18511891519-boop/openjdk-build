@@ -141,6 +141,9 @@ configureMacOSCodesignParameter() {
   if [[ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_DRAGONWELL}" ]] && [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "jdk21" ]; then
     #local macos_bundle_build_version=0
     addConfigureArg "--with-macosx-bundle-build-version=" "0"
+    if [ "${BUILD_CONFIG[OS_KERNEL_NAME]}" == "linux" ]; then
+      addConfigureArg "--with-jvm-features=" "aiext"
+    fi
   fi
 }
 
@@ -729,6 +732,70 @@ executeTemplatedFile() {
 
   # Restore exit behavior
   set -eu
+  if [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "${JDK11_CORE_VERSION}" ] && [ -n "`echo ${BUILD_CONFIG[BUILD_FULL_NAME]} | grep -E 'linux-x86_64|linux-aarch64'`" ]; then
+    PRODUCT_HOME=$(ls -d ${PWD}/build/*/images/${BUILD_CONFIG[JDK_PATH]})
+    git clone https://github.com/dragonwell-project/serverless-adapter.git
+    cd serverless-adapter
+    #if [ -n "`echo ${BUILD_CONFIG[TARGET_FILE_NAME]} | grep alpine-linux`" ];then
+    #  PATH=/usr/lib/jvm/zulu11/bin:$PATH JAVA_HOME=/usr/lib/jvm/zulu11 mvn package
+    #else
+    local jdk_path=jdk-11
+    if [ "$(arch)" = "x86_64" ] && [ -z "$(echo ${BUILD_CONFIG[TARGET_FILE_NAME]} | grep riscv)" ];then
+        jdk_path=jdk11
+    fi
+    PATH=/usr/lib/jvm/${jdk_path}/bin:$PATH JAVA_HOME=/usr/lib/jvm/${jdk_path} mvn package
+    #fi
+    cd -
+    mkdir -p ${PRODUCT_HOME}/lib/serverless
+    cp serverless-adapter/target/serverless-adapter-0.1.jar ${PRODUCT_HOME}/lib/serverless/serverless-adapter.jar
+    cp serverless-adapter/output/libloadclassagent.so ${PRODUCT_HOME}/lib/serverless/
+    set -x
+    if [ -z "`echo ${BUILD_CONFIG[BRANCH]} | grep standard`" ];then
+      local criuReleaseUrl="https://api.github.com/repos/dragonwell-project/criu/releases/latest"
+      if [ "$(arch)" = "x86_64" ];then
+        local criuDownloadUrl=$(curl -s ${criuReleaseUrl} | grep -i browser_download_url | grep "x64." | cut -d '"' -f 4)
+      elif [ "$(arch)" = "aarch64" ];then
+        local criuDownloadUrl=$(curl -s ${criuReleaseUrl} | grep -i browser_download_url | grep "arm64." | cut -d '"' -f 4)
+      fi
+      if [ -n "${criuDownloadUrl}" ];then
+        rm -rf criu*
+        curl -LSk -C - --retry 5 ${criuDownloadUrl} -o criu.tar.gz
+        tar zxf criu.tar.gz
+        chmod +x criu
+        mv criu ${PRODUCT_HOME}/lib/
+      fi
+    fi
+    set +x
+  elif [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "${JDK8_CORE_VERSION}" ] && [ -n "`echo ${BUILD_CONFIG[BUILD_FULL_NAME]} | grep -E 'linux-x86_64|linux-aarch64'`" ]; then
+    PRODUCT_HOME=$(ls -d ${PWD}/build/*/images/${BUILD_CONFIG[JDK_PATH]})
+    git clone https://github.com/dragonwell-project/serverless-adapter-jdk8.git serverless-adapter
+    cd serverless-adapter
+    if [ "$(arch)" = 'x86_64' ];then
+      wget -q https://dragonwell.oss-cn-shanghai.aliyuncs.com/8.16.17/Alibaba_Dragonwell_Extended_8.16.17_x64_linux.tar.gz -O dragonwell.tar.gz
+    else
+      wget -q https://dragonwell.oss-cn-shanghai.aliyuncs.com/8.16.17/Alibaba_Dragonwell_Extended_8.16.17_aarch64_linux.tar.gz -O dragonwell.tar.gz
+    fi
+    tar xf dragonwell.tar.gz
+    pwd
+    $(pwd)/dragonwell-8.16.17/bin/java -version
+    PATH=$(pwd)/dragonwell-8.16.17/bin:$PATH JAVA_HOME=$(pwd)/dragonwell-8.16.17 mvn package
+    cd -
+    if [ "$(arch)" = "x86_64" ];then
+      arch_dir=amd64
+    else
+      arch_dir=$(arch)
+    fi
+    mkdir -p ${PRODUCT_HOME}/jre/lib/${arch_dir}/serverless
+    cp serverless-adapter/target/serverless-adapter-0.1.jar ${PRODUCT_HOME}/jre/lib/${arch_dir}/serverless/serverless-adapter.jar
+    cp serverless-adapter/output/libloadclassagent.so ${PRODUCT_HOME}/jre/lib/${arch_dir}/serverless
+  elif [ "${BUILD_CONFIG[OPENJDK_CORE_VERSION]}" == "jdk21" ] && [ -n "`echo ${BUILD_CONFIG[BUILD_FULL_NAME]} | grep -E 'linux-x86_64|linux-aarch64'`" ]; then
+    PRODUCT_HOME=$(ls -d ${PWD}/build/*/images/${BUILD_CONFIG[JDK_PATH]})
+    libjvm_path=$(find ${PRODUCT_HOME} -iname libjvm.so)
+    wget https://dragonwell.oss-cn-shanghai.aliyuncs.com/tools/signutil -O signutil
+    chmod +x signutil
+    ./signutil sign ~/sk.bin ${libjvm_path}
+    ./signutil verify ~/pk.bin ${libjvm_path}
+  fi
 }
 
 createOpenJDKFailureLogsArchive() {
@@ -792,6 +859,8 @@ buildCyclonedxLib() {
   # Make Ant aware of cygwin path
   if [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]]; then
     ANTBUILDFILE=$(cygpath -m "${CYCLONEDB_DIR}/build.xml")
+    export ANT_HOME=/cygdrive/c/apache-ant
+    export PATH=${ANT_HOME}/bin:$PATH
   else
     ANTBUILDFILE="${CYCLONEDB_DIR}/build.xml"
   fi
