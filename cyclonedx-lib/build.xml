@@ -15,7 +15,7 @@
 -->
 
 <project name="cyclonedx-lib build" default="build" basedir=".">
-        <taskdef resource="net/sf/antcontrib/antlib.xml" />
+        <taskdef resource="net/sf/antcontrib/antlib.xml" onerror="ignore" />
         <!--
 // jscpd:ignore-start
 -->
