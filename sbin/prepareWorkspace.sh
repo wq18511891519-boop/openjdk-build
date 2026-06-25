@@ -440,14 +440,6 @@ downloadFile() {
   local url="$2"
 
   echo downloadFile: Saving "url" to "$targetFileName"
-  if [ "${http_proxy}" != "" || "${HTTP_PROXY}" != "" ];then
-    unset http_proxy
-    unset HTTP_PROXY
-  fi
-  if [ "${https_proxy}" != "" ];then
-    unset https_proxy
-  fi
-  printenv
 
   # Temporary fudge as curl on my windows boxes is exiting with RC=127
   if [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]]; then
