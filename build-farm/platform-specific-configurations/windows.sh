@@ -149,6 +149,11 @@ then
       export JDK_BOOT_DIR="${DRAGONWELL8_BOOTSTRAP}"
     fi
   fi
+
+  if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "${JAVA_TO_BUILD}" == "${JDK17_VERSION}" ]
+  then
+    export JDK_BOOT_DIR="/cygdrive/c/openjdk/dragonwell-bootstrap/jdk-16.0.2+7"
+  fi
 fi
 
 if [[ "$JAVA_FEATURE_VERSION" -ge 21 ]]; then
