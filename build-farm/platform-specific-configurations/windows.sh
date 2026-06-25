@@ -223,6 +223,11 @@ then
     TOOLCHAIN_VERSION="2013"
   fi
 
+  if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "${JAVA_TO_BUILD}" == "${JDK11_VERSION}" ]
+  then
+    export JDK_BOOT_DIR=/cygdrive/c/Jenkins/jdk11/
+    TOOLCHAIN_VERSION="2017"
+  fi
 fi
 
 if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "${JAVA_TO_BUILD}" == "jdk17" ]
