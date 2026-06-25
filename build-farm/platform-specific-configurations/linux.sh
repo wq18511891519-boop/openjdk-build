@@ -211,7 +211,7 @@ if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION
   export CXX=/usr/local/gcc9/bin/g++-9.3
   # Enable GCC 10 for Java 17+ for repeatable builds, but not for our supported releases
   # Ref https://github.com/adoptium/temurin-build/issues/2787
-elif [ "$JAVA_FEATURE_VERSION" -ge 25 ]; then
+elif [ "$JAVA_FEATURE_VERSION" -ge 25 ] && [ "${ARCHITECTURE}" != "riscv64" ]; then
   if [ "$(arch)" = "x86_64" ]; then
     wget -q https://github.com/adoptium/devkit-binaries/releases/download/gcc-14.2.0-Centos7.9.2009-b00/devkit-gcc-14.2.0-Centos7.9.2009-b00-x86_64-linux-gnu.tar.xz -O devkit-gcc.tar.xz
     mkdir -p /usr/local/gcc14
@@ -319,6 +319,15 @@ if [ "${ARCHITECTURE}" == "riscv64" ] && [ "${NATIVE_API_ARCH}" != "riscv64" ]; 
   if [ ! -d "${RISCV_SYSROOT}" ]; then
      echo "RISCV_SYSROOT=${RISCV_SYSROOT} is undefined or does not exist - cannot proceed"
      exit 1
+  fi
+  if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION" -ge 25 ]; then
+    export RISCV64=/opt/riscv_toolchain_gcc14
+    export LD_LIBRARY_PATH=$RISCV64/lib64:${RISCV64}/sysroot/lib/:$LD_LIBRARY_PATH
+    export PATH=${RISCV64}/bin/:$PATH
+    export  CC=/opt/riscv_toolchain_gcc14/bin/riscv64-unknown-linux-gnu-gcc-14.2.0
+    export CXX=/opt/riscv_toolchain_gcc14/bin/riscv64-unknown-linux-gnu-g++
+    RISCV_SYSROOT=/opt/riscv_toolchain_gcc14/sysroot
+    echo "use sysroot ${RISCV_SYSROOT}"
   fi
   CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --openjdk-target=riscv64-unknown-linux-gnu --with-sysroot=${RISCV_SYSROOT} -with-boot-jdk=$JDK_BOOT_DIR"
 
