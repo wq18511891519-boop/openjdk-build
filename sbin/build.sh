@@ -386,6 +386,8 @@ getOpenJdkVersion() {
       version=$(getOpenJDKTag)
       version=$(echo "$version" | cut -d'_' -f 2)
     fi
+  elif [ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_FAST_STARTUP}" ]; then
+    version="jdk-11.0.0.0"
   elif [ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_BISHENG}" ]; then
     local bishengVerFile=${BUILD_CONFIG[WORKSPACE_DIR]}/${BUILD_CONFIG[WORKING_DIR]}/${BUILD_CONFIG[OPENJDK_SOURCE_DIR]}/version.txt
     if [ -r "${bishengVerFile}" ]; then
@@ -2629,6 +2631,10 @@ getFirstTagFromOpenJDKGitRepo() {
 
   if [ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_DRAGONWELL}" ]; then
     TAG_SEARCH="dragonwell-*_jdk*"
+  fi
+
+  if [ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_FAST_STARTUP}" ]; then
+    TAG_SEARCH="fast_startup-*_jdk*"
   fi
 
   if [ "${BUILD_CONFIG[BUILD_VARIANT]}" == "${BUILD_VARIANT_BISHENG}" ] && [ "${BUILD_CONFIG[OS_ARCHITECTURE]}" == "riscv64" ]; then

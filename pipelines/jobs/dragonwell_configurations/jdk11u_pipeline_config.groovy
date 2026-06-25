@@ -39,6 +39,7 @@ class Config11 {
                         "corretto"    : '--enable-dtrace=auto',
                         "SapMachine"  : '--enable-dtrace=auto',
                         "dragonwell"  : '--enable-dtrace=auto --enable-unlimited-crypto --with-jvm-variants=server --with-zlib=system --with-jvm-features=zgc'
+                        "fast_startup": '--enable-dtrace=auto --with-jvm-variants=server',
                 ]
         ],
 
