@@ -1,34 +1,185 @@
 #!/bin/bash
 # shellcheck disable=SC1091
-
-################################################################################
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# ********************************************************************************
+# Copyright (c) 2018 Contributors to the Eclipse Foundation
 #
-#      https://www.apache.org/licenses/LICENSE-2.0
+# See the NOTICE file(s) with this work for additional
+# information regarding copyright ownership.
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-################################################################################
+# This program and the accompanying materials are made
+# available under the terms of the Apache Software License 2.0
+# which is available at https://www.apache.org/licenses/LICENSE-2.0.
+#
+# SPDX-License-Identifier: Apache-2.0
+# ********************************************************************************
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # shellcheck source=sbin/common/constants.sh
 source "$SCRIPT_DIR/../../sbin/common/constants.sh"
+source "$SCRIPT_DIR/../../sbin/common/downloaders.sh"
 
-# Bundling our own freetype can cause problems, so we skip that on linux.
-export BUILD_ARGS="${BUILD_ARGS} --skip-freetype"
+## This affects Alpine docker images and also evaluation pipelines
+if [ "$(pwd | wc -c)" -gt 83 ]; then
+  # Use /tmp for alpine in preference to $HOME as Alpine fails gpg operation if PWD > 83 characters
+  # Alpine also cannot create ~/.gpg-temp within a docker context
+  GNUPGHOME="$(mktemp -d /tmp/.gpg-temp.XXXXXX)"
+else
+  GNUPGHOME="${WORKSPACE:-$PWD}/.gpg-temp"
+fi
+if [ ! -d "$GNUPGHOME" ]; then
+    mkdir -m 700 "$GNUPGHOME"
+fi
+export GNUPGHOME
 
 NATIVE_API_ARCH=$(uname -m)
 if [ "${NATIVE_API_ARCH}" = "x86_64" ]; then NATIVE_API_ARCH=x64; fi
 if [ "${NATIVE_API_ARCH}" = "armv7l" ]; then NATIVE_API_ARCH=arm; fi
 
+function locateDragonwell8BootJDK()
+{
+  if [ -d /opt/dragonwell8 ]; then
+    export "${BOOT_JDK_VARIABLE}"=/opt/dragonwell8
+  elif [ -d /usr/lib/jvm/dragonwell8 ]; then
+    export "${BOOT_JDK_VARIABLE}"=/usr/lib/jvm/dragonwell8
+  else
+    echo Dragonwell 8 requires a Dragonwell boot JDK - downloading one ...
+    mkdir -p "$PWD/jdk8"
+    # if [ "$(uname -m)" = "x86_64" ]; then
+    #   curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.11.12_jdk8u332-ga/Alibaba_Dragonwell_8.11.12_x64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk8"
+    # elif [ "$(uname -m)" = "aarch64" ]; then
+    #   curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.8.9_jdk8u302-ga/Alibaba_Dragonwell_8.8.9_aarch64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk8"
+    # else
+    #   echo "Unknown architecture $(uname -m) for building Dragonwell - cannot download boot JDK"
+    #   exit 1
+    # fi
+    ## Secure Dragonwell Downloads By Validating Checksums
+    if [ "$(uname -m)" = "x86_64" ]; then
+      DOWNLOAD_URL="https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.11.12_jdk8u332-ga/Alibaba_Dragonwell_8.11.12_x64_linux.tar.gz"
+      EXPECTED_SHA256="E03923f200dffddf9eee2aadc0c495674fe0b87cc2eece94a9a8dec84812d12bd"
+    elif [ "$(uname -m)" = "aarch64" ]; then
+      DOWNLOAD_URL="https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.8.9_jdk8u302-ga/Alibaba_Dragonwell_8.8.9_aarch64_linux.tar.gz"
+      EXPECTED_SHA256="ff0594f36d13883972ca0b302d35cca5099f10b8be54c70c091f626e4e308774"
+    else
+      echo "Unknown architecture $(uname -m) for building Dragonwell - cannot download boot JDK"
+      exit 1
+    fi
+    # Download the file and calculate its SHA256 checksum
+    TMP_FILE=$(mktemp)
+    curl -L "$DOWNLOAD_URL" -o "$TMP_FILE"
+
+    # Calculate the SHA256 checksum of the downloaded file
+    ACTUAL_SHA256=$(sha256sum "$TMP_FILE" | awk '{print $1}')
+
+    # Compare the actual and expected SHA256 checksums
+    if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+      echo "Checksum verification failed for downloaded file!"
+      rm "$TMP_FILE"
+      exit 1
+    fi
+
+    # Extract the downloaded file
+    tar xpzf "$TMP_FILE" --strip-components=1 -C "$PWD/jdk8"
+
+    # Clean up the temporary file
+    rm "$TMP_FILE"
+    export "${BOOT_JDK_VARIABLE}"="$PWD/jdk8"
+  fi
+}
+
+function setCrossCompilerEnvironment()
+{
+  if [ "${VARIANT}" == "${BUILD_VARIANT_OPENJ9}" ]; then
+    export BUILDJDK=${WORKSPACE:-$PWD}/buildjdk
+    echo "RISCV cross-compilation for OpenJ9 ... Downloading required nightly OpenJ9/${NATIVE_API_ARCH} as build JDK to $BUILDJDK"
+    rm -rf "$BUILDJDK"
+    mkdir "$BUILDJDK"
+    # TOFIX: Switch this back once Semeru has an API to pull the nightly builds.
+    curl -L "https://api.adoptopenjdk.net/v3/binary/latest/${JAVA_FEATURE_VERSION}/ga/linux/${NATIVE_API_ARCH}/jdk/openj9/normal/adoptopenjdk" | tar xpzf - --strip-components=1 -C "$BUILDJDK"
+    "$BUILDJDK/bin/java" -version 2>&1 | sed 's/^/CROSSBUILD JDK > /g' || exit 1
+    CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-build-jdk=$BUILDJDK --disable-ddr"
+    if [ -d /usr/local/openssl102 ]; then
+      CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-openssl=/usr/local/openssl102"
+    fi
+  elif [ "${VARIANT}" == "${BUILD_VARIANT_BISHENG}" ]; then
+    if [ -r /usr/local/gcc/bin/gcc-7.5 ]; then
+      BUILD_CC=/usr/local/gcc/bin/gcc-7.5
+      BUILD_CXX=/usr/local/gcc/bin/g++-7.5
+      BUILD_LIBRARY_PATH=/usr/local/gcc/lib64:/usr/local/gcc/lib
+    fi
+    # Check if BUILD_CXX/BUILD_CC for Bisheng RISC-V exists
+    if [ ! -x "$BUILD_CXX" ]; then
+      echo "Bisheng RISC-V host compiler BUILD_CXX=$BUILD_CXX does not exist on this system - cannot continue"
+      exit 1
+    fi
+  fi
+
+  # RISC-V cross compile settings for all VARIANT values
+  echo RISC-V cross-compilation setup ...  Setting RISCV64, LD_LIBRARY_PATH, PATH, CC, CXX
+  export RISCV64=/opt/riscv_toolchain_linux
+  export LD_LIBRARY_PATH=$RISCV64/lib64
+  if [ "${VARIANT}" == "${BUILD_VARIANT_BISHENG}" ]; then
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$BUILD_LIBRARY_PATH
+  fi
+
+  if [ -r "$RISCV64/bin/riscv64-unknown-linux-gnu-g++" ]; then
+    export CC=$RISCV64/bin/riscv64-unknown-linux-gnu-gcc
+    export CXX=$RISCV64/bin/riscv64-unknown-linux-gnu-g++
+    export PATH="$RISCV64/bin:$PATH"
+  elif [ -r /usr/bin/riscv64-linux-gnu-g++ ]; then
+    export CC=/usr/bin/riscv64-linux-gnu-gcc
+    export CXX=/usr/bin/riscv64-linux-gnu-g++
+    # This is required for OpenJ9 if not using "riscv64-unknown-linux-gnu-*"
+    # i.e. if using the default cross compiler supplied with Debian/Ubuntu
+    export RISCV_TOOLCHAIN_TYPE=install
+  fi
+  RISCV_SYSROOT=${RISCV_SYSROOT:-/opt/fedora28_riscv_root}
+  if [ ! -d "${RISCV_SYSROOT}" ]; then
+     echo "RISCV_SYSROOT=${RISCV_SYSROOT} is undefined or does not exist - cannot proceed"
+     exit 1
+  fi
+  CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --openjdk-target=riscv64-unknown-linux-gnu --with-sysroot=${RISCV_SYSROOT} -with-boot-jdk=$JDK_BOOT_DIR"
+
+  # RISC-V cross compilation does not work with OpenJ9's option: --with-openssl=fetched
+  # TODO: This file needs an overhaul as it's getting too long and hard to maintain ...
+  if [ "${VARIANT}" == "${BUILD_VARIANT_OPENJ9}" ]; then
+    # shellcheck disable=SC2001
+    CONFIGURE_ARGS_FOR_ANY_PLATFORM=$(echo "$CONFIGURE_ARGS_FOR_ANY_PLATFORM" | sed "s,with-openssl=[^ ]*,with-openssl=${RISCV_SYSROOT}/usr,g")
+    if ! which qemu-riscv64-static; then
+      # don't download it if we already have it from a previous build
+      if [ ! -x "$WORKSPACE/qemu-riscv64-static" ]; then
+        echo Download qemu-riscv64-static as it is required for the OpenJ9 cross build ...
+        curl https://ci.adoptium.net/userContent/riscv/qemu-riscv64-static.xz | xz -d > "$WORKSPACE/qemu-riscv64-static" && \
+        chmod 755 "$WORKSPACE/qemu-riscv64-static"
+      fi
+      export PATH="$PATH:$WORKSPACE" && \
+      qemu-riscv64-static --version
+    fi
+  fi
+
+  if [ "${VARIANT}" == "${BUILD_VARIANT_BISHENG}" ]; then
+    CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --with-jvm-features=shenandoahgc BUILD_CC=$BUILD_CC BUILD_CXX=$BUILD_CXX"
+  fi
+  BUILD_ARGS="${BUILD_ARGS} --cross-compile -F"
+  if [ ! -x "$CXX" ]; then
+    echo "RISC-V cross compiler CXX=$CXX does not exist on this system - cannot continue"
+    exit 1
+  fi
+}
+
 if [ "${ARCHITECTURE}" == "x64" ]
 then
   export PATH=/opt/rh/devtoolset-2/root/usr/bin:$PATH
+fi
+
+## Fix For Issue https://github.com/adoptium/temurin-build/issues/3547
+## Add Missing Library Path For Ubuntu 22+
+if [ -e /etc/os-release ]; then
+  ID=$(grep "^ID=" /etc/os-release | awk -F'=' '{print $2}')
+  INT_VERSION_ID=$(grep "^VERSION_ID=" /etc/os-release | awk -F'"' '{print $2}' | awk -F'.' '{print $1}')
+  LIB_ARCH=$(uname -m)-linux-gnu
+  if [ "$ID" == "ubuntu" ] && [ "$INT_VERSION_ID" -ge "22" ]; then
+      export LIBRARY_PATH=/usr/lib/$LIB_ARCH:$LIBRARY_PATH
+  fi
 fi
 
 if [ "${ARCHITECTURE}" == "s390x" ]
@@ -55,8 +206,7 @@ then
 
   if [ "${ARCHITECTURE}" == "ppc64le" ] || [ "${ARCHITECTURE}" == "x64" ]
   then
-    CUDA_VERSION=9.0
-    CUDA_HOME=/usr/local/cuda-$CUDA_VERSION
+    CUDA_HOME=/usr/local/cuda
     if [ -f $CUDA_HOME/include/cuda.h ]
     then
       export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --enable-cuda --with-cuda=$CUDA_HOME"
@@ -109,82 +259,32 @@ then
   echo "=== END OF ARM32 STATUS CHECK ==="
 fi
 
+# Disable PCH (precompiled-headers) for jdk-21+ Temurin builds, to ensure deterministic reproducible builds
+# ref: https://github.com/adoptium/temurin-build/issues/4401
+if [ "${VARIANT}" == "${BUILD_VARIANT_TEMURIN}" ] && [ "$JAVA_FEATURE_VERSION" -ge 21 ];
+then
+  echo "Disabling precompiled headers as this may introduce non-deterministic PCH gch binaries, especially if ASLR is enabled, see: https://gcc.gnu.org/onlinedocs/gcc/Precompiled-Headers.html and https://github.com/adoptium/temurin-build/issues/4401"
+  export CONFIGURE_ARGS_FOR_ANY_PLATFORM="${CONFIGURE_ARGS_FOR_ANY_PLATFORM} --disable-precompiled-headers"
+fi
+
 BOOT_JDK_VARIABLE="JDK${JDK_BOOT_VERSION}_BOOT_DIR"
 if [ "${VARIANT}" == "${BUILD_VARIANT_DRAGONWELL}" ] && [ "$JAVA_FEATURE_VERSION" -eq 8 ]; then
-  if [ -d /opt/dragonwell8 ]; then
-    export "${BOOT_JDK_VARIABLE}"=/opt/dragonwell8
-  elif [ -d /usr/lib/jvm/dragonwell8 ]; then
-    export "${BOOT_JDK_VARIABLE}"=/usr/lib/jvm/dragonwell8
-  else
-    echo Dragonwell 8 requires a Dragonwell boot JDK - downloading one ...
-    mkdir -p "$PWD/jdk-8"
-    if [ "$(uname -m)" = "x86_64" ]; then
-      curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.11.12_jdk8u332-ga/Alibaba_Dragonwell_8.11.12_x64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk-8"
-    elif [ "$(uname -m)" = "aarch64" ]; then
-      curl -L "https://github.com/alibaba/dragonwell8/releases/download/dragonwell-8.8.9_jdk8u302-ga/Alibaba_Dragonwell_8.8.9_aarch64_linux.tar.gz" | tar xpzf - --strip-components=1 -C "$PWD/jdk-8"
-    else
-      echo "Unknown architecture $(uname -m) for building Dragonwell - cannot download boot JDK"
-      exit 1
-    fi
-    export "${BOOT_JDK_VARIABLE}"="$PWD/jdk-8"
-  fi
+  locateDragonwell8BootJDK
 fi
 
 if [ ! -d "$(eval echo "\$$BOOT_JDK_VARIABLE")" ]; then
-  bootDir="$PWD/jdk-$JDK_BOOT_VERSION"
+  bootDir="$PWD/jdk$JDK_BOOT_VERSION"
   # Note we export $BOOT_JDK_VARIABLE (i.e. JDKXX_BOOT_DIR) here
   # instead of BOOT_JDK_VARIABLE (no '$').
   export "${BOOT_JDK_VARIABLE}"="$bootDir"
   if [ ! -x "$bootDir/bin/javac" ]; then
     # Set to a default location as linked in the ansible playbooks
-    if [ -x "/usr/lib/jvm/jdk-${JDK_BOOT_VERSION}/bin/javac" ]; then
-      echo "Could not use ${BOOT_JDK_VARIABLE} - using /usr/lib/jvm/jdk-${JDK_BOOT_VERSION}"
+    if [ -x "/usr/lib/jvm/jdk${JDK_BOOT_VERSION}/bin/javac" ]; then
+      echo "Could not use ${BOOT_JDK_VARIABLE} - using /usr/lib/jvm/jdk${JDK_BOOT_VERSION}"
       # shellcheck disable=SC2140
-      export "${BOOT_JDK_VARIABLE}"="/usr/lib/jvm/jdk-${JDK_BOOT_VERSION}"
+      export "${BOOT_JDK_VARIABLE}"="/usr/lib/jvm/jdk${JDK_BOOT_VERSION}"
     elif [ "$JDK_BOOT_VERSION" -ge 8 ]; then # Adoptium has no build pre-8
-      mkdir -p "$bootDir"
-      export downloadArch
-      case "$ARCHITECTURE" in
-         "riscv64") downloadArch="$NATIVE_API_ARCH";;
-                 *) downloadArch="$ARCHITECTURE";;
-      esac
-      releaseType="ga"
-      vendor="eclipse"
-      apiUrlTemplate="https://api.adoptium.net/v3/binary/latest/\${JDK_BOOT_VERSION}/\${releaseType}/linux/\${downloadArch}/jdk/hotspot/normal/\${vendor}"
-      apiURL=$(eval echo ${apiUrlTemplate})
-      echo "Downloading GA release of boot JDK version ${JDK_BOOT_VERSION} from ${apiURL}"
-      # make-adopt-build-farm.sh has 'set -e'. We need to disable that for
-      # the fallback mechanism, as downloading of the GA binary might fail.
-      set +e
-      curl -L "${apiURL}" | tar xpzf - --strip-components=1 -C "$bootDir"
-      retVal=$?
-      set -e
-      if [ $retVal -ne 0 ]; then
-        # We must be a JDK HEAD build for which no boot JDK exists other than
-        # nightlies?
-        echo "Downloading GA release of boot JDK version ${JDK_BOOT_VERSION} failed."
-        # shellcheck disable=SC2034
-        releaseType="ea"
-        # shellcheck disable=SC2034
-        vendor="adoptium"
-        apiURL=$(eval echo ${apiUrlTemplate})
-        echo "Attempting to download EA release of boot JDK version ${JDK_BOOT_VERSION} from ${apiURL}"
-        set +e
-        curl -L "${apiURL}" | tar xpzf - --strip-components=1 -C "$bootDir"
-        retVal=$?
-        set -e
-        if [ $retVal -ne 0 ]; then
-          # If no binaries are available then try from adoptopenjdk
-          echo "Downloading Temurin release of boot JDK version ${JDK_BOOT_VERSION} failed."
-          # shellcheck disable=SC2034
-          releaseType="ga"
-          # shellcheck disable=SC2034
-          vendor="adoptium"
-          apiURL=$(eval echo ${apiUrlTemplate})
-          echo "Attempting to download GA release of boot JDK version ${JDK_BOOT_VERSION} from ${apiURL}"
-          curl -L "${apiURL}" | tar xpzf - --strip-components=1 -C "$bootDir"
-        fi
-      fi
+      downloadLinuxBootJDK "${ARCHITECTURE}" "${JDK_BOOT_VERSION}" "$bootDir"
     fi
   fi
 fi

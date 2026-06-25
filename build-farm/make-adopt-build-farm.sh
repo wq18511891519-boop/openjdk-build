@@ -183,7 +183,7 @@ case "${JDK_BOOT_VERSION}" in
 esac
 
 
-if [ ! -d "${JDK_BOOT_DIR}" ] && [ "${JDK_BOOT_VERSION}" != "17" ]
+if [ ! -d "${JDK_BOOT_DIR}" ] && [ "${JAVA_TO_BUILD}" != "jdk17" ]
 then
   echo Setting JDK_BOOT_DIR to \$JAVA_HOME
   export JDK_BOOT_DIR="${JAVA_HOME}"
